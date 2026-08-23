@@ -1,6 +1,6 @@
 # Python 逻辑微服务框架
 
-[中文文档](README.zh-CN.md) | [English Documentation](README.en.md)
+[English](README.en.md)
 
 一个基于Python的逻辑微服务运行时框架，提供完整的微服务基础设施和开发体验。
 
@@ -275,9 +275,7 @@ py-microservice-framework/
 │   ├── build-spec.md         # 构建规范
 │   └── local_repository_spec.md # 本地仓库规范
 ├── .repository/              # 本地包仓库
-├── README.md                 # 项目说明
-├── README.zh-CN.md           # 中文文档
-└── README.en.md              # 英文文档
+└── README.md                 # 项目说明
 ```
 
 ## 📚 文档
