@@ -21,3 +21,7 @@ dev-dependencies = [
     "pytest-asyncio>=1",
     "pytest-mock>=3",
 ]
+
+[[tool.uv.index]]
+name = "backend-local"
+url = "../../.repository/simple"
