@@ -31,16 +31,16 @@ uv sync
 uv run pytest tests/ -v --tb=short
 ```
 
-**预期结果**: 看到184个测试通过，框架安装成功！
+**预期结果**: 看到227个测试通过，框架安装成功！
 
 ### 3. 运行功能演示
 
 ```bash
-# 返回项目根目录
-cd ..
+# 进入框架目录，在框架虚拟环境中执行
+cd framework
 
 # 运行框架功能验证
-python app/verification_demo.py
+uv run python ../app/verification_demo.py
 ```
 
 **预期结果**: 看到完整的框架功能演示，包括基础服务、拦截器、可观测性等。
@@ -108,12 +108,12 @@ from litestar import get
 from my_service.service import MyService
 
 @get("/items/{item_id:int}")
-async def get_item(item_id: int, service: MyService):
+async def get_item(item_id: int, service: MyService) -> dict:
     """获取单个项目API"""
     return await service.get_item(item_id)
 
 @get("/items")
-async def get_all_items(service: MyService):
+async def get_all_items(service: MyService) -> list:
     """获取所有项目API"""
     return await service.get_all_items()
 ```
@@ -131,10 +131,10 @@ from my_service.repository import MyRepository
 repository = MyRepository()
 service = MyService(repository)
 
-# 创建应用
+# 创建应用（Litestar 的依赖提供器必须是可调用对象）
 app = Litestar(
     route_handlers=[get_item, get_all_items],
-    dependencies={"service": service}
+    dependencies={"service": lambda: service}
 )
 
 if __name__ == "__main__":
@@ -169,8 +169,8 @@ packages = ["src/my_service"]
 #### 7. 运行服务
 
 ```bash
-# 安装依赖
-pip install litestar uvicorn
+# 安装服务（可编辑模式，会同时安装声明的 litestar/uvicorn 依赖）
+pip install -e .
 
 # 运行服务
 python src/my_service/main.py
@@ -196,13 +196,12 @@ open http://localhost:8000/schema
 框架已经提供了完整的Service Demo示例：
 
 ```bash
-# 安装用户服务示例
-cd services/user
-pip install -e .
+# 安装用户服务示例到框架虚拟环境（可编辑模式）
+cd framework
+uv pip install -e ../services/user
 
 # 运行集成测试
-cd ../../framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 
 # 测试结果应该显示9个测试全部通过
 ```
@@ -234,7 +233,7 @@ metadata = ServiceMetadata(
 registry.register("my-service", MyService(), metadata=metadata)
 
 # 查找服务
-service = registry.get("my-service")
+service = registry.get_service("my-service")
 result = await service.do_something()
 ```
 
@@ -245,11 +244,17 @@ from serviceframework.interceptor.base import ServiceInterceptor, InterceptorCon
 from serviceframework.interceptor.pipeline import InterceptorPipeline
 
 class LoggingInterceptor(ServiceInterceptor):
-    async def intercept(self, context: InterceptorContext):
-        print(f"调用服务: {context.service_name}.{context.method}")
-        result = await context.proceed()
+    async def before(self, context: InterceptorContext) -> None:
+        # 调用前执行
+        print(f"调用服务: {context.service_context.service_name}.{context.method}")
+
+    async def after(self, context: InterceptorContext, result) -> None:
+        # 调用成功后执行（按添加的逆序）
         print(f"调用完成")
-        return result
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        # 调用失败后执行
+        print(f"调用失败: {error}")
 
 # 创建拦截器管道
 pipeline = InterceptorPipeline()
@@ -387,13 +392,13 @@ pytest tests/ -v --asyncio-mode=auto
 ```bash
 # 运行Service Demo集成测试
 cd framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 
 # 运行框架核心测试
-python -m pytest tests/test_service_contract.py tests/test_registry.py -v
+uv run pytest tests/test_service_contract.py tests/test_service_registry.py -v
 
 # 运行可观测性测试
-python -m pytest tests/test_telemetry.py -v
+uv run pytest tests/test_telemetry.py -v
 ```
 
 ## 🎯 常见使用场景
@@ -462,13 +467,13 @@ pip install -e .
 
 #### 2. 导入错误
 ```bash
-# 确保在正确的目录
+# 依赖必须以包方式安装，禁止使用 PYTHONPATH/sys.path 指向源码目录
+# （参见 doc/local_repository_spec.md 第19节）
 cd framework
-export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+uv sync
 
-# 或重新安装框架
-pip uninstall serviceframework
-cd framework && pip install -e .
+# 示例服务以可编辑模式安装到框架虚拟环境
+uv pip install -e ../services/user
 ```
 
 #### 3. 测试失败

@@ -3,64 +3,75 @@
 
 演示框架的核心功能：
 - 服务创建和注册
-- HTTP和gRPC通信
+- 进程内服务通信
 - 服务间调用
-- 数据库集成
+- 依赖注入
 - 可观测性追踪
 - 拦截器使用
 """
 
 import asyncio
+import time
 from typing import Dict, Any
 
-from serviceframework.contract.service import ServiceDefinition, ServiceContext
+from serviceframework.contract.service import (
+    ServiceDefinition, ServiceContext, ServiceMetadata, ServiceError,
+)
 from serviceframework.contract.request import ServiceRequest
+from serviceframework.contract.response import ServiceResponse
 from serviceframework.proxy.factory import ProxyFactory
 from serviceframework.registry.registry import ServiceRegistry
-from serviceframework.transport.local import LocalTransportFactory
-from serviceframework.interceptor.pipeline import InterceptorPipeline, InterceptorContext
-from serviceframework.interceptor.base import ServiceInterceptor
-from serviceframework.observability.telemetry import TelemetryManager, TraceConfig
-from serviceframework.runtime.di import DIContainer
+from serviceframework.transport.local import LocalTransport
+from serviceframework.interceptor.pipeline import InterceptorPipeline
+from serviceframework.interceptor.base import ServiceInterceptor, InterceptorContext
+from serviceframework.observability.telemetry import TelemetryManager
+from serviceframework.observability.config import TraceConfig
+from serviceframework.runtime.di import DependencyContainer
+
+# 兼容别名：示例与测试统一使用的名字
+DIContainer = DependencyContainer
+ServiceProxyFactory = ProxyFactory
 
 
 class LoggingInterceptor(ServiceInterceptor):
-    """日志拦截器"""
-
-    async def intercept(self, context: InterceptorContext):
-        """拦截服务调用并记录日志"""
-        print(f"[LOGGING] 调用服务: {context.service_name}.{context.method}")
-        try:
-            result = await context.proceed()
-            print(f"[LOGGING] 调用成功")
-            return result
-        except Exception as e:
-            print(f"[LOGGING] 调用失败: {e}")
-            raise
-
-
-class MetricsInterceptor(ServiceInterceptor):
-    """指标拦截器"""
+    """日志拦截器：调用前后输出日志"""
 
     def __init__(self):
         self.call_count = 0
         self.error_count = 0
 
-    async def intercept(self, context: InterceptorContext):
-        """拦截服务调用并记录指标"""
+    async def before(self, context: InterceptorContext) -> None:
         self.call_count += 1
-        start_time = asyncio.get_event_loop().time()
+        print(f"[LOGGING] 调用服务: {context.service_context.service_name}.{context.method}")
 
-        try:
-            result = await context.proceed()
-            duration = asyncio.get_event_loop().time() - start_time
-            print(f"[METRICS] 调用次数: {self.call_count}, 耗时: {duration:.3f}s")
-            return result
-        except Exception as e:
-            self.error_count += 1
-            duration = asyncio.get_event_loop().time() - start_time
-            print(f"[METRICS] 错误次数: {self.error_count}, 耗时: {duration:.3f}s")
-            raise
+    async def after(self, context: InterceptorContext, result: Any) -> None:
+        print(f"[LOGGING] 调用成功")
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        self.error_count += 1
+        print(f"[LOGGING] 调用失败: {error}")
+
+
+class MetricsInterceptor(ServiceInterceptor):
+    """指标拦截器：统计调用次数、错误次数和耗时"""
+
+    def __init__(self):
+        self.call_count = 0
+        self.error_count = 0
+
+    async def before(self, context: InterceptorContext) -> None:
+        self.call_count += 1
+        context.add_metadata("metrics_start_time", time.monotonic())
+
+    async def after(self, context: InterceptorContext, result: Any) -> None:
+        start = context.get_metadata("metrics_start_time")
+        if start is not None:
+            duration = time.monotonic() - start
+            print(f"[METRICS] 调用次数: {self.call_count}, 耗时: {duration:.6f}s")
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        self.error_count += 1
+        print(f"[METRICS] 错误次数: {self.error_count}")
 
 
 class UserRepository:
@@ -141,6 +152,58 @@ class OrderService:
         return orders
 
 
+class LocalTransportEndpoint:
+    """
+    本地传输端点
+
+    包装 LocalTransport，提供请求-响应式的进程内服务调用。
+    """
+
+    def __init__(self, service_name: str):
+        self.service_name = service_name
+        self._transport: LocalTransport = None
+
+    def register_service(self, service: Any) -> None:
+        """注册服务实例到传输端点"""
+        self._transport = LocalTransport(service)
+
+    async def send_request(self, request: ServiceRequest) -> ServiceResponse:
+        """
+        发送服务调用请求
+
+        Args:
+            request: 服务请求
+
+        Returns:
+            服务响应
+
+        Raises:
+            RuntimeError: 如果服务未注册
+        """
+        if self._transport is None:
+            raise RuntimeError(f"服务'{self.service_name}'未注册到传输端点")
+
+        try:
+            data = await self._transport.invoke(
+                request.method, *request.args, **request.kwargs
+            )
+            return ServiceResponse.success_response(data)
+        except Exception as exc:
+            if isinstance(exc, ServiceError):
+                error = exc
+            else:
+                error = ServiceError(str(exc), code="TRANSPORT_ERROR")
+            return ServiceResponse.error_response(error)
+
+
+class LocalTransportFactory:
+    """本地传输工厂：为服务定义创建进程内传输端点"""
+
+    def create_transport(self, service_def: ServiceDefinition) -> LocalTransportEndpoint:
+        """根据服务定义创建本地传输端点"""
+        return LocalTransportEndpoint(service_def.name)
+
+
 async def demo_basic_service():
     """基础服务演示"""
     print("=" * 50)
@@ -182,22 +245,23 @@ async def demo_service_registry():
     # 创建服务注册表
     registry = ServiceRegistry()
 
-    # 定义服务
-    user_service_def = ServiceDefinition(
-        name="user-service",
-        version="1.0.0",
-        description="用户服务"
-    )
+    # 创建服务实例
+    user_repository = UserRepository()
+    order_repository = OrderRepository()
+    user_service = UserService(user_repository)
+    order_service = OrderService(order_repository, user_service)
 
-    order_service_def = ServiceDefinition(
-        name="order-service",
-        version="1.0.0",
-        description="订单服务"
+    # 注册服务（名称 + 实例 + 元数据）
+    registry.register(
+        "user-service",
+        user_service,
+        metadata=ServiceMetadata(name="user-service", version="1.0.0", description="用户服务"),
     )
-
-    # 注册服务
-    registry.register(user_service_def)
-    registry.register(order_service_def)
+    registry.register(
+        "order-service",
+        order_service,
+        metadata=ServiceMetadata(name="order-service", version="1.0.0", description="订单服务"),
+    )
 
     print(f"\n注册的服务: {registry.list_services()}")
     print(f"服务总数: {registry.count()}")
@@ -219,7 +283,10 @@ async def demo_dependency_injection():
     container.register_instance(UserRepository, user_repository)
     container.register_instance(OrderRepository, order_repository)
     container.register_factory(UserService, lambda: UserService(user_repository))
-    container.register_factory(OrderService, lambda: OrderService(order_repository, UserService(user_repository)))
+    container.register_factory(
+        OrderService,
+        lambda: OrderService(order_repository, UserService(user_repository)),
+    )
 
     # 解析服务
     print("\n从DI容器解析服务...")
@@ -255,26 +322,21 @@ async def demo_interceptors():
     user_repository = UserRepository()
     user_service = UserService(user_repository)
 
-    # 创建拦截上下文
-    async def test_call():
-        context = ServiceContext("user-service", "get_user", "req-1")
-        request = ServiceRequest("user-service", "get_user", args=(1,), context=context)
-
-        # 创建拦截器上下文
-        interceptor_context = InterceptorContext(
-            service_name="user-service",
-            method="get_user",
-            request=request,
-            service=user_service,
-            target_func=user_service.get_user,
-            args=(1,),
-            kwargs={}
-        )
-
-        return await pipeline.execute(interceptor_context)
-
+    # 创建拦截上下文并执行
     print("\n执行带拦截器的服务调用...")
-    await test_call()
+    service_context = ServiceContext("user-service", "get_user", "req-1")
+    interceptor_context = InterceptorContext(
+        service_context=service_context,
+        method="get_user",
+        args=(1,),
+        kwargs={}
+    )
+
+    async def target():
+        return await user_service.get_user(1)
+
+    result = await pipeline.execute(interceptor_context, target)
+    print(f"调用结果: {result}")
 
     print(f"\n指标统计: 调用次数={metrics_interceptor.call_count}, 错误次数={metrics_interceptor.error_count}")
 
@@ -323,43 +385,37 @@ async def demo_service_communication():
     transport_factory = LocalTransportFactory()
     proxy_factory = ServiceProxyFactory()
 
-    # 定义服务
-    user_service_def = ServiceDefinition(
-        name="user-service",
-        version="1.0.0",
-        description="用户服务"
-    )
-
-    order_service_def = ServiceDefinition(
-        name="order-service",
-        version="1.0.0",
-        description="订单服务"
-    )
-
     # 创建服务实例
     user_repository = UserRepository()
     order_repository = OrderRepository()
     user_service = UserService(user_repository)
     order_service = OrderService(order_repository, user_service)
 
-    # 创建传输层
-    user_transport = transport_factory.create_transport(user_service_def)
-    order_transport = transport_factory.create_transport(order_service_def)
-
-    # 注册服务到传输层
+    # 创建传输端点并注册服务
+    user_transport = transport_factory.create_transport(
+        ServiceDefinition(name="user-service", version="1.0.0", description="用户服务")
+    )
+    order_transport = transport_factory.create_transport(
+        ServiceDefinition(name="order-service", version="1.0.0", description="订单服务")
+    )
     user_transport.register_service(user_service)
     order_transport.register_service(order_service)
 
+    # 通过代理工厂创建本地代理
+    user_proxy = proxy_factory.create_local_proxy("user-service", user_service)
+
     print("\n服务通信测试:")
     print("1. 通过传输层调用用户服务")
-    context = ServiceContext("user-service", "get_user", "req-1")
-    request = ServiceRequest("user-service", "get_user", args=(1,), context=context)
+    request = ServiceRequest("user-service", "get_user", args=(1,))
     response = await user_transport.send_request(request)
     print(f"   结果: {response.data}")
 
-    print("\n2. 通过传输层调用订单服务（包含用户信息）")
-    context = ServiceContext("order-service", "get_order", "req-2")
-    request = ServiceRequest("order-service", "get_order", args=(1,), context=context)
+    print("\n2. 通过本地代理调用用户服务")
+    proxy_result = await user_proxy.invoke("get_user", 1)
+    print(f"   结果: {proxy_result}")
+
+    print("\n3. 通过传输层调用订单服务（包含用户信息）")
+    request = ServiceRequest("order-service", "get_order", args=(1,))
     response = await order_transport.send_request(request)
     print(f"   结果: {response.data}")
 
@@ -382,7 +438,7 @@ async def main():
     print("=" * 50)
     print("\n框架核心功能演示总结:")
     print("✅ 基础服务功能 - Repository、Service、API分层架构")
-    print("✅ 服务注册 - 动态服务发现和注册")
+    print("✅ 服务注册 - 动态服务发现")
     print("✅ 依赖注入 - 自动依赖解析和生命周期管理")
     print("✅ 拦截器链 - AOP编程和横切关注点")
     print("✅ 可观测性 - 分布式追踪和指标收集")

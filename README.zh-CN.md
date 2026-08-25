@@ -90,20 +90,19 @@ from litestar import get
 from user_service.service import UserService
 
 @get("/users/{user_id:int}")
-async def get_user(user_id: int, service: UserService):
+async def get_user(user_id: int, service: UserService) -> dict:
     return await service.get_user(user_id)
 ```
 
 #### 5. 运行验证
 
 ```bash
-# 安装服务
-cd services/user
-pip install -e .
+# 安装示例服务到框架虚拟环境（可编辑模式）
+cd framework
+uv pip install -e ../services/user
 
 # 运行集成测试
-cd ../framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 ```
 
 ### 功能验证演示
@@ -111,8 +110,9 @@ python -m pytest tests/test_service_demo_integration.py -v
 框架提供了完整的功能验证演示：
 
 ```bash
-# 运行功能验证
-python app/verification_demo.py
+# 运行功能验证（在框架虚拟环境中执行）
+cd framework
+uv run python ../app/verification_demo.py
 ```
 
 演示包括：
@@ -196,7 +196,7 @@ from litestar import get
 from my_service.service import MyService
 
 @get("/items/{item_id:int}")
-async def get_item(item_id: int, service: MyService):
+async def get_item(item_id: int, service: MyService) -> dict:
     return await service.get_item(item_id)
 ```
 
@@ -216,7 +216,7 @@ service = MyService(repository)
 # 创建应用
 app = Litestar(
     route_handlers=[get_item],
-    dependencies={"service": service}
+    dependencies={"service": lambda: service}
 )
 
 if __name__ == "__main__":
@@ -241,10 +241,10 @@ uv run pytest tests/test_remote_service.py -v
 
 ### 测试结果
 
-- **总体测试通过率**: 97.9% (184/188 tests passed)
+- **总体测试通过率**: 100% (227/227 tests passed)
 - **核心模块**: 100% 通过
 - **Service Demo**: 100% 通过 (9/9 tests)
-- **新增模块**: 100% 通过
+- **示例应用集成测试 (demo_app)**: 100% 通过 (23/23 tests)
 
 ## 📂 项目结构
 
@@ -303,7 +303,7 @@ MIT License
 **✅ 框架已完全就绪，可用于生产环境**
 
 - 12个核心模块全部实现
-- 184个测试用例通过率97.9%
+- 227个测试用例全部通过（100%）
 - Service Demo案例完全验证
 - 支持复杂的分布式应用开发
 

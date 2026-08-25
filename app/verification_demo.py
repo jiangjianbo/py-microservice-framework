@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import time
 from typing import Dict, Any
 
 from serviceframework.contract.service import ServiceDefinition, ServiceContext, ServiceMetadata
@@ -20,16 +21,23 @@ from serviceframework.registry.registry import ServiceRegistry
 class LoggingInterceptor(ServiceInterceptor):
     """日志拦截器"""
 
-    async def intercept(self, context: InterceptorContext):
-        """拦截服务调用并记录日志"""
-        print(f"[LOGGING] 调用服务: {context.service_name}.{context.method}")
-        try:
-            result = await context.proceed()
-            print(f"[LOGGING] 调用成功")
-            return result
-        except Exception as e:
-            print(f"[LOGGING] 调用失败: {e}")
-            raise
+    def __init__(self):
+        self.call_count = 0
+        self.error_count = 0
+
+    async def before(self, context: InterceptorContext) -> None:
+        """调用前记录日志"""
+        self.call_count += 1
+        print(f"[LOGGING] 调用服务: {context.service_context.service_name}.{context.method}")
+
+    async def after(self, context: InterceptorContext, result: Any) -> None:
+        """调用成功后记录日志"""
+        print(f"[LOGGING] 调用成功")
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        """调用失败后记录日志"""
+        self.error_count += 1
+        print(f"[LOGGING] 调用失败: {error}")
 
 
 class MetricsInterceptor(ServiceInterceptor):
@@ -39,21 +47,22 @@ class MetricsInterceptor(ServiceInterceptor):
         self.call_count = 0
         self.error_count = 0
 
-    async def intercept(self, context: InterceptorContext):
-        """拦截服务调用并记录指标"""
+    async def before(self, context: InterceptorContext) -> None:
+        """调用前记录开始时间"""
         self.call_count += 1
-        start_time = asyncio.get_event_loop().time()
+        context.add_metadata("metrics_start_time", time.monotonic())
 
-        try:
-            result = await context.proceed()
-            duration = asyncio.get_event_loop().time() - start_time
-            print(f"[METRICS] 调用次数: {self.call_count}, 耗时: {duration:.3f}s")
-            return result
-        except Exception as e:
-            self.error_count += 1
-            duration = asyncio.get_event_loop().time() - start_time
-            print(f"[METRICS] 错误次数: {self.error_count}, 耗时: {duration:.3f}s")
-            raise
+    async def after(self, context: InterceptorContext, result: Any) -> None:
+        """调用成功后记录耗时"""
+        start_time = context.get_metadata("metrics_start_time")
+        if start_time is not None:
+            duration = time.monotonic() - start_time
+            print(f"[METRICS] 调用次数: {self.call_count}, 耗时: {duration:.6f}s")
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        """调用失败后记录错误"""
+        self.error_count += 1
+        print(f"[METRICS] 错误次数: {self.error_count}")
 
 
 class UserRepository:

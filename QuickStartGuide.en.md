@@ -31,16 +31,16 @@ uv sync
 uv run pytest tests/ -v --tb=short
 ```
 
-**Expected Result**: 184 tests pass, framework successfully installed!
+**Expected Result**: 227 tests pass, framework successfully installed!
 
 ### 3. Run Feature Demo
 
 ```bash
-# Return to project root
-cd ..
+# Enter framework directory, run inside the framework venv
+cd framework
 
 # Run framework feature verification
-python app/verification_demo.py
+uv run python ../app/verification_demo.py
 ```
 
 **Expected Result**: See complete framework feature demonstrations including basic services, interceptors, observability, etc.
@@ -108,12 +108,12 @@ from litestar import get
 from my_service.service import MyService
 
 @get("/items/{item_id:int}")
-async def get_item(item_id: int, service: MyService):
+async def get_item(item_id: int, service: MyService) -> dict:
     """Get single item API"""
     return await service.get_item(item_id)
 
 @get("/items")
-async def get_all_items(service: MyService):
+async def get_all_items(service: MyService) -> list:
     """Get all items API"""
     return await service.get_all_items()
 ```
@@ -134,7 +134,7 @@ service = MyService(repository)
 # Create application
 app = Litestar(
     route_handlers=[get_item, get_all_items],
-    dependencies={"service": service}
+    dependencies={"service": lambda: service}
 )
 
 if __name__ == "__main__":
@@ -169,8 +169,8 @@ packages = ["src/my_service"]
 #### 7. Run Service
 
 ```bash
-# Install dependencies
-pip install litestar uvicorn
+# Install the service (editable mode; also installs its litestar/uvicorn deps)
+pip install -e .
 
 # Run service
 python src/my_service/main.py
@@ -196,13 +196,12 @@ open http://localhost:8000/schema
 The framework provides complete Service Demo examples:
 
 ```bash
-# Install user service example
-cd services/user
-pip install -e .
+# Install user service example into the framework venv (editable mode)
+cd framework
+uv pip install -e ../services/user
 
 # Run integration tests
-cd ../../framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 
 # Test results should show all 9 tests passing
 ```
@@ -234,7 +233,7 @@ metadata = ServiceMetadata(
 registry.register("my-service", MyService(), metadata=metadata)
 
 # Find service
-service = registry.get("my-service")
+service = registry.get_service("my-service")
 result = await service.do_something()
 ```
 
@@ -245,11 +244,17 @@ from serviceframework.interceptor.base import ServiceInterceptor, InterceptorCon
 from serviceframework.interceptor.pipeline import InterceptorPipeline
 
 class LoggingInterceptor(ServiceInterceptor):
-    async def intercept(self, context: InterceptorContext):
-        print(f"Calling service: {context.service_name}.{context.method}")
-        result = await context.proceed()
+    async def before(self, context: InterceptorContext) -> None:
+        # Runs before the call
+        print(f"Calling service: {context.service_context.service_name}.{context.method}")
+
+    async def after(self, context: InterceptorContext, result) -> None:
+        # Runs after success (reverse order of addition)
         print(f"Call completed")
-        return result
+
+    async def on_error(self, context: InterceptorContext, error: Exception) -> None:
+        # Runs on failure
+        print(f"Call failed: {error}")
 
 # Create interceptor pipeline
 pipeline = InterceptorPipeline()
@@ -387,13 +392,13 @@ pytest tests/ -v --asyncio-mode=auto
 ```bash
 # Run Service Demo integration tests
 cd framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 
 # Run framework core tests
-python -m pytest tests/test_service_contract.py tests/test_registry.py -v
+uv run pytest tests/test_service_contract.py tests/test_service_registry.py -v
 
 # Run observability tests
-python -m pytest tests/test_telemetry.py -v
+uv run pytest tests/test_telemetry.py -v
 ```
 
 ## 🎯 Common Use Cases
@@ -462,13 +467,14 @@ pip install -e .
 
 #### 2. Import Errors
 ```bash
-# Ensure you're in the right directory
+# Dependencies must be installed as packages; never point
+# PYTHONPATH/sys.path at source directories
+# (see doc/local_repository_spec.md section 19)
 cd framework
-export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+uv sync
 
-# Or reinstall framework
-pip uninstall serviceframework
-cd framework && pip install -e .
+# Install example services into the framework venv in editable mode
+uv pip install -e ../services/user
 ```
 
 #### 3. Test Failures

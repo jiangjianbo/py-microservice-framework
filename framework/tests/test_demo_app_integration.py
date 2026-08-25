@@ -10,7 +10,7 @@ from unittest.mock import Mock, AsyncMock
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'app'))
 
 from demo_app import (
     UserRepository, OrderRepository, UserService, OrderService,
@@ -20,6 +20,8 @@ from demo_app import (
     LocalTransportFactory, ServiceProxyFactory,
     ServiceRequest
 )
+from serviceframework.interceptor.base import InterceptorContext
+from serviceframework.contract.service import ServiceMetadata
 
 
 class TestBasicService:
@@ -121,13 +123,17 @@ class TestServiceRegistry:
     def test_register_service(self):
         """测试服务注册"""
         registry = ServiceRegistry()
-        service_def = ServiceDefinition(
-            name="test-service",
-            version="1.0.0",
-            description="测试服务"
-        )
 
-        registry.register(service_def)
+        user_repository = UserRepository()
+        user_service = UserService(user_repository)
+
+        registry.register(
+            "test-service",
+            user_service,
+            metadata=ServiceMetadata(
+                name="test-service", version="1.0.0", description="测试服务"
+            ),
+        )
 
         assert "test-service" in registry.list_services()
 
@@ -135,11 +141,21 @@ class TestServiceRegistry:
         """测试列出服务"""
         registry = ServiceRegistry()
 
-        user_service = ServiceDefinition("user-service", "1.0.0", "用户服务")
-        order_service = ServiceDefinition("order-service", "1.0.0", "订单服务")
+        user_repository = UserRepository()
+        order_repository = OrderRepository()
+        user_service = UserService(user_repository)
+        order_service = OrderService(order_repository, user_service)
 
-        registry.register(user_service)
-        registry.register(order_service)
+        registry.register(
+            "user-service",
+            user_service,
+            metadata=ServiceMetadata(name="user-service", version="1.0.0", description="用户服务"),
+        )
+        registry.register(
+            "order-service",
+            order_service,
+            metadata=ServiceMetadata(name="order-service", version="1.0.0", description="订单服务"),
+        )
 
         services = registry.list_services()
         assert len(services) == 2
@@ -204,49 +220,48 @@ class TestInterceptors:
         user_repository = UserRepository()
         user_service = UserService(user_repository)
 
-        context = ServiceContext("user-service", "get_user", "req-1")
-        request = ServiceRequest("user-service", "get_user", args=(1,), context=context)
-
-        # 模拟拦截器上下文
-        from serviceframework.interceptor.base import InterceptorContext
-
+        service_context = ServiceContext("user-service", "get_user", "req-1")
         interceptor_context = InterceptorContext(
-            service_name="user-service",
+            service_context=service_context,
             method="get_user",
-            request=request,
-            service=user_service,
-            target_func=user_service.get_user,
             args=(1,),
             kwargs={}
         )
 
-        result = await interceptor.intercept(interceptor_context)
+        async def target():
+            return await user_service.get_user(1)
+
+        # 通过管道执行（拦截器的 before/after 会被调用）
+        pipeline = InterceptorPipeline()
+        pipeline.add_interceptor(interceptor)
+        result = await pipeline.execute(interceptor_context, target)
+
         assert result is not None
         assert result["id"] == 1
+        assert interceptor.call_count == 1
+        assert interceptor.error_count == 0
 
     @pytest.mark.asyncio
     async def test_metrics_interceptor(self):
         """测试指标拦截器"""
         interceptor = MetricsInterceptor()
         user_repository = UserRepository()
-        user_service = UserService(user_service)
+        user_service = UserService(user_repository)
 
-        context = ServiceContext("user-service", "get_user", "req-1")
-        request = ServiceRequest("user-service", "get_user", args=(1,), context=context)
-
-        from serviceframework.interceptor.base import InterceptorContext
-
+        service_context = ServiceContext("user-service", "get_user", "req-1")
         interceptor_context = InterceptorContext(
-            service_name="user-service",
+            service_context=service_context,
             method="get_user",
-            request=request,
-            service=user_service,
-            target_func=user_service.get_user,
             args=(1,),
             kwargs={}
         )
 
-        result = await interceptor.intercept(interceptor_context)
+        async def target():
+            return await user_service.get_user(1)
+
+        pipeline = InterceptorPipeline()
+        pipeline.add_interceptor(interceptor)
+        result = await pipeline.execute(interceptor_context, target)
 
         assert interceptor.call_count == 1
         assert interceptor.error_count == 0
@@ -266,25 +281,22 @@ class TestInterceptors:
         user_repository = UserRepository()
         user_service = UserService(user_repository)
 
-        context = ServiceContext("user-service", "get_user", "req-1")
-        request = ServiceRequest("user-service", "get_user", args=(1,), context=context)
-
-        from serviceframework.interceptor.base import InterceptorContext
-
+        service_context = ServiceContext("user-service", "get_user", "req-1")
         interceptor_context = InterceptorContext(
-            service_name="user-service",
+            service_context=service_context,
             method="get_user",
-            request=request,
-            service=user_service,
-            target_func=user_service.get_user,
             args=(1,),
             kwargs={}
         )
 
-        result = await pipeline.execute(interceptor_context)
+        async def target():
+            return await user_service.get_user(1)
+
+        result = await pipeline.execute(interceptor_context, target)
 
         assert result["id"] == 1
         assert metrics_interceptor.call_count == 1
+        assert logging_interceptor.call_count == 1
 
 
 class TestObservability:

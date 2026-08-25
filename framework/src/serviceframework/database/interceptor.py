@@ -74,6 +74,12 @@ class DatabaseInterceptor(ServiceInterceptor):
                 **self.config.get_engine_options()
             )
             self._setup_sync_events()
+
+            # 创建同步会话工厂
+            self._session_factory = sessionmaker(
+                bind=self._engine,
+                expire_on_commit=self.config.expunge_on_commit
+            )
     
     def _setup_sync_events(self) -> None:
         """设置同步引擎事件"""
@@ -219,6 +225,7 @@ class DatabaseInterceptor(ServiceInterceptor):
         info = {
             "url": self.config.url,
             "async_engine": self.config.async_engine,
+            "engine": None,
             "pool_size": self.config.pool_size,
             "max_overflow": self.config.max_overflow,
             "echo": self.config.echo,
@@ -226,16 +233,25 @@ class DatabaseInterceptor(ServiceInterceptor):
         
         if self._engine is not None:
             pool = self._engine.pool
+            info["engine"] = str(self._engine)
             info["engine_status"] = "connected"
-            info["pool_size"] = pool.size()
-            info["checked_in_connections"] = pool.checkedout()
-            info["overflow_connections"] = pool.overflow()
+            # 不同连接池实现中统计项可能是方法（QueuePool）或属性（SingletonThreadPool 等）
+            info["pool_size"] = self._pool_stat(pool, "size")
+            info["checked_in_connections"] = self._pool_stat(pool, "checkedout")
+            info["overflow_connections"] = self._pool_stat(pool, "overflow")
         elif self._async_engine is not None:
+            info["engine"] = str(self._async_engine)
             info["async_engine_status"] = "connected"
         
         info["sql_history_count"] = len(self._sql_history)
         
         return info
+    
+    @staticmethod
+    def _pool_stat(pool: Pool, name: str, default: int = 0) -> int:
+        """读取连接池统计项，兼容方法与属性两种实现"""
+        value = getattr(pool, name, default)
+        return value() if callable(value) else value
     
     def get_sql_history(self) -> list[Dict[str, Any]]:
         """

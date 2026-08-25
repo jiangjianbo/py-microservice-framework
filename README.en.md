@@ -90,20 +90,19 @@ from litestar import get
 from user_service.service import UserService
 
 @get("/users/{user_id:int}")
-async def get_user(user_id: int, service: UserService):
+async def get_user(user_id: int, service: UserService) -> dict:
     return await service.get_user(user_id)
 ```
 
 #### 5. Run Verification
 
 ```bash
-# Install service
-cd services/user
-pip install -e .
+# Install the example service into the framework venv (editable mode)
+cd framework
+uv pip install -e ../services/user
 
 # Run integration tests
-cd ../framework
-python -m pytest tests/test_service_demo_integration.py -v
+uv run pytest tests/test_service_demo_integration.py -v
 ```
 
 ### Feature Verification Demo
@@ -111,8 +110,9 @@ python -m pytest tests/test_service_demo_integration.py -v
 The framework provides comprehensive feature verification demo:
 
 ```bash
-# Run feature verification
-python app/verification_demo.py
+# Run feature verification (inside the framework venv)
+cd framework
+uv run python ../app/verification_demo.py
 ```
 
 Demonstrations include:
@@ -196,7 +196,7 @@ from litestar import get
 from my_service.service import MyService
 
 @get("/items/{item_id:int}")
-async def get_item(item_id: int, service: MyService):
+async def get_item(item_id: int, service: MyService) -> dict:
     return await service.get_item(item_id)
 ```
 
@@ -216,7 +216,7 @@ service = MyService(repository)
 # Create application
 app = Litestar(
     route_handlers=[get_item],
-    dependencies={"service": service}
+    dependencies={"service": lambda: service}
 )
 
 if __name__ == "__main__":
@@ -241,10 +241,10 @@ uv run pytest tests/test_remote_service.py -v
 
 ### Test Results
 
-- **Overall Test Pass Rate**: 97.9% (184/188 tests passed)
+- **Overall Test Pass Rate**: 100% (227/227 tests passed)
 - **Core Modules**: 100% passed
 - **Service Demo**: 100% passed (9/9 tests)
-- **New Modules**: 100% passed
+- **Demo App Integration (demo_app)**: 100% passed (23/23 tests)
 
 ## 📂 Project Structure
 
@@ -305,7 +305,7 @@ MIT License
 **✅ Framework is fully ready for production use**
 
 - All 12 core modules implemented
-- 184 test cases with 97.9% pass rate
+- All 227 test cases passed (100%)
 - Service Demo cases fully verified
 - Supports complex distributed application development
 

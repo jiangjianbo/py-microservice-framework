@@ -70,6 +70,22 @@ class DependencyContainer:
             "type": dependency_type  # 保存类型信息
         }
     
+    def register_factory(
+        self,
+        dependency_type: Type[T],
+        factory: Callable[..., T],
+        scope: Scope = Scope.SINGLETON
+    ) -> None:
+        """
+        注册依赖工厂
+
+        Args:
+            dependency_type: 依赖类型
+            factory: 工厂函数
+            scope: 依赖作用域
+        """
+        self.register(dependency_type, factory=factory, scope=scope)
+    
     def register_instance(
         self,
         dependency_type: Type[T],
@@ -155,6 +171,26 @@ class DependencyContainer:
         # TODO: 实现真正的作用域管理
         return self._resolve_singleton(dependency_type, registration)
     
+    def _resolve_annotation(self, annotation: Any) -> Any:
+        """
+        解析类型注解
+
+        支持字符串形式的前向引用注解：按已注册类型的 __name__ 匹配。
+        无法匹配时原样返回。
+
+        Args:
+            annotation: 参数类型注解
+
+        Returns:
+            解析后的类型
+        """
+        if not isinstance(annotation, str):
+            return annotation
+        for registered in self._registrations:
+            if getattr(registered, "__name__", None) == annotation:
+                return registered
+        return annotation
+
     def _create_instance(
         self,
         dependency_type: Type[T],
@@ -191,7 +227,9 @@ class DependencyContainer:
                         
                         if param.annotation != inspect.Parameter.empty:
                             # 尝试解析依赖
-                            dependency = self.resolve(param.annotation)
+                            dependency = self.resolve(
+                                self._resolve_annotation(param.annotation)
+                            )
                             injected_kwargs[param_name] = dependency
                     
                     # 合并参数
@@ -205,6 +243,10 @@ class DependencyContainer:
                 
                 return instance
                 
+            except ValueError:
+                # 依赖解析错误（未注册/循环依赖）必须向上传播，
+                # 不能被回退逻辑掩盖
+                raise
             except Exception:
                 # 如果自动注入失败，使用原始参数
                 try:
